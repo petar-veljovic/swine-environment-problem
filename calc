@@ -1,0 +1,66 @@
+def calculate_precision_recall_f1(predictions, targets, iou_threshold=0.5):
+
+    tp = 0
+    fp = 0
+    fn = 0
+
+    for pred, target in zip(predictions, targets):
+
+        pred_boxes = pred.xyxy
+        target_boxes = target.xyxy
+
+        matched_targets = set()
+
+        for i, pbox in enumerate(pred_boxes):
+
+            best_iou = 0
+            best_target = -1
+
+            for j, tbox in enumerate(target_boxes):
+
+                if j in matched_targets:
+                    continue
+
+                x1 = max(pbox[0], tbox[0])
+                y1 = max(pbox[1], tbox[1])
+                x2 = min(pbox[2], tbox[2])
+                y2 = min(pbox[3], tbox[3])
+
+                intersection = max(0, x2 - x1) * max(0, y2 - y1)
+
+                area_p = (
+                    (pbox[2] - pbox[0]) *
+                    (pbox[3] - pbox[1])
+                )
+
+                area_t = (
+                    (tbox[2] - tbox[0]) *
+                    (tbox[3] - tbox[1])
+                )
+
+                union = area_p + area_t - intersection
+
+                iou = intersection / union if union > 0 else 0
+
+                if iou > best_iou:
+                    best_iou = iou
+                    best_target = j
+
+            if best_iou >= iou_threshold:
+                tp += 1
+                matched_targets.add(best_target)
+            else:
+                fp += 1
+
+        fn += len(target_boxes) - len(matched_targets)
+
+    precision = tp / (tp + fp) if tp + fp > 0 else 0
+    recall = tp / (tp + fn) if tp + fn > 0 else 0
+
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall > 0
+        else 0
+    )
+
+    return precision, recall, f1
