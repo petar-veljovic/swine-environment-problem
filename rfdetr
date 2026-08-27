@@ -1,0 +1,286 @@
+from rfdetr import RFDETRMedium
+from pathlib import Path
+from PIL import Image
+import supervision as sv
+import numpy as np
+import json
+
+
+# ============================================================
+# CONFIGURAÇÕES
+# ============================================================
+
+MODEL_PATH = "rfdetr_training/RFDETRMedium/checkpoint_best_regular.pth"
+
+TEST_IMAGES = Path("test/images")
+TEST_LABELS = Path("test/labels")
+
+OUTPUT_JSON = "rfdetr_medium_test_results.json"
+
+THRESHOLD = 0.5
+
+
+# ============================================================
+# CARREGAR MODELO
+# ============================================================
+
+print("Loading RF-DETR Medium...")
+
+model = RFDETRMedium(
+    pretrain_weights=MODEL_PATH
+)
+
+print("Model loaded.")
+print()
+
+
+# ============================================================
+# LISTAR IMAGENS
+# ============================================================
+
+image_extensions = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".webp"
+}
+
+image_files = sorted(
+    [
+        p for p in TEST_IMAGES.iterdir()
+        if p.suffix.lower() in image_extensions
+    ]
+)
+
+print(f"Found {len(image_files)} test images.")
+
+
+# ============================================================
+# PREPARAR DADOS
+# ============================================================
+
+all_predictions = []
+all_targets = []
+
+
+# ============================================================
+# INFERÊNCIA
+# ============================================================
+
+for i, image_path in enumerate(image_files, 1):
+
+    print(
+        f"\rProcessing {i}/{len(image_files)}",
+        end="",
+        flush=True
+    )
+
+    # --------------------------------------------------------
+    # Imagem
+    # --------------------------------------------------------
+
+    image = Image.open(image_path).convert("RGB")
+
+    width, height = image.size
+
+
+    # --------------------------------------------------------
+    # RF-DETR prediction
+    # --------------------------------------------------------
+
+    detections = model.predict(
+        image,
+        threshold=THRESHOLD
+    )
+
+
+    # --------------------------------------------------------
+    # Ground truth YOLO
+    # --------------------------------------------------------
+
+    label_path = TEST_LABELS / f"{image_path.stem}.txt"
+
+    gt_boxes = []
+    gt_classes = []
+
+    if label_path.exists():
+
+        with open(label_path, "r") as f:
+
+            for line in f:
+
+                values = line.strip().split()
+
+                if len(values) != 5:
+                    continue
+
+                class_id = int(values[0])
+
+                xc = float(values[1])
+                yc = float(values[2])
+                w = float(values[3])
+                h = float(values[4])
+
+                x1 = (xc - w / 2) * width
+                y1 = (yc - h / 2) * height
+                x2 = (xc + w / 2) * width
+                y2 = (yc + h / 2) * height
+
+                gt_boxes.append(
+                    [x1, y1, x2, y2]
+                )
+
+                gt_classes.append(class_id)
+
+
+    # --------------------------------------------------------
+    # Criar supervision Detections
+    # --------------------------------------------------------
+
+    targets = sv.Detections(
+        xyxy=np.array(
+            gt_boxes,
+            dtype=np.float32
+        ).reshape(-1, 4),
+
+        class_id=np.array(
+            gt_classes,
+            dtype=int
+        )
+    )
+
+
+    # RF-DETR já retorna supervision.Detections
+    predictions = detections
+
+
+    all_predictions.append(predictions)
+    all_targets.append(targets)
+
+
+print()
+print("Inference completed.")
+print()
+
+
+# ============================================================
+# CALCULAR AP / mAP
+# ============================================================
+
+print("Calculating metrics...")
+
+
+# Combinar todas as detecções
+predictions = sv.Detections.merge(all_predictions)
+targets = sv.Detections.merge(all_targets)
+
+
+# ============================================================
+# MÉTRICAS
+# ============================================================
+
+# Classe única
+class_names = {
+    0: "0"
+}
+
+
+# COCO-style AP
+metric = sv.MeanAveragePrecision(
+    recall_thresholds=np.linspace(
+        0,
+        1,
+        101
+    )
+)
+
+
+metric.update(
+    predictions=predictions,
+    targets=targets
+)
+
+result = metric.compute()
+
+
+# ============================================================
+# RESULTADOS
+# ============================================================
+
+print()
+print("=" * 60)
+print("RF-DETR MEDIUM - TEST RESULTS")
+print("=" * 60)
+
+print(f"mAP50:       {result.map50:.4f}")
+print(f"mAP50-95:    {result.map50_95:.4f}")
+
+
+# ============================================================
+# PRECISION / RECALL / F1
+# ============================================================
+
+# Matching com IoU = 0.50
+tp, fp, fn = sv.detection.get_detection_statistics(
+    predictions=predictions,
+    targets=targets,
+    iou_threshold=0.50
+)
+
+precision = (
+    tp / (tp + fp)
+    if (tp + fp) > 0
+    else 0.0
+)
+
+recall = (
+    tp / (tp + fn)
+    if (tp + fn) > 0
+    else 0.0
+)
+
+f1 = (
+    2 * precision * recall / (precision + recall)
+    if (precision + recall) > 0
+    else 0.0
+)
+
+
+print(f"Precision:   {precision:.4f}")
+print(f"Recall:      {recall:.4f}")
+print(f"F1:          {f1:.4f}")
+
+print("=" * 60)
+
+
+# ============================================================
+# SALVAR JSON
+# ============================================================
+
+metrics_to_save = {
+    "Model": "RF-DETR Medium",
+    "Checkpoint": MODEL_PATH,
+    "mAP50": float(result.map50),
+    "mAP50-95": float(result.map50_95),
+    "Precision": float(precision),
+    "Recall": float(recall),
+    "F1": float(f1)
+}
+
+
+with open(
+    OUTPUT_JSON,
+    "w",
+    encoding="utf-8"
+) as f:
+
+    json.dump(
+        metrics_to_save,
+        f,
+        indent=4
+    )
+
+
+print()
+print(f"Metrics saved to: {OUTPUT_JSON}")
