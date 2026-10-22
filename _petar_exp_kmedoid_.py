@@ -56,7 +56,7 @@ def generate_default_config(config_path):
     default_config = {
         "epochs_mode": "dynamic",  # "static" ou "dynamic"
         "base_epochs": 100,
-        "max_epochs": 300,        # teto maximo no modo dinamico
+        "max_epochs": null, #300,        # teto maximo no modo dinamico
         "image_size": 640,
     }
 
